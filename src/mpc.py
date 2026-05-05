@@ -17,31 +17,23 @@ class SimpleMPC(Node):
 
         super().__init__("simple_mpc")
 
-        # =========================
-        # Robot state
-        # =========================
+
         self.x = 0.0
         self.y = 0.0
         self.yaw = 0.0
+        self.current_path_index = 0
 
-        # =========================
-        # Data containers
-        # =========================
+
         self.path = []
         self.scan = None
 
-        # =========================
-        # Publishers
-        # =========================
+
         self.cmd_pub = self.create_publisher(
             Twist,
             "/cmd_vel",
             10
         )
 
-        # =========================
-        # Subscribers
-        # =========================
         self.create_subscription(
             Path,
             "/path",
@@ -63,26 +55,21 @@ class SimpleMPC(Node):
             10
         )
 
-        # =========================
-        # MPC Parameters
-        # =========================
+
         self.horizon = 30
         self.dt = 0.1
 
         self.max_v = 0.3
-        self.max_w = 0.5
+        self.max_w = 1.25
 
         self.goal_tolerance = 0.2
 
-        # Candidate controls
+
         self.v_samples = np.linspace(0.05, 0.3, 10)
         self.w_samples = np.linspace(-self.max_w, self.max_w, 15)
 
         self.dynamic_obstacles = []
 
-        # =========================
-        # Timer
-        # =========================
         self.timer = self.create_timer(
             0.1,
             self.control_loop
@@ -90,9 +77,7 @@ class SimpleMPC(Node):
 
         self.get_logger().info("Simple MPC Controller Started")
 
-    # ==========================================================
-    # Path Callback
-    # ==========================================================
+    
     def path_callback(self, msg):
 
         self.path = []
@@ -108,9 +93,6 @@ class SimpleMPC(Node):
             f"Received path with {len(self.path)} points"
         )
 
-    # ==========================================================
-    # Odom Callback
-    # ==========================================================
     def odom_callback(self, msg):
 
         self.x = msg.pose.pose.position.x
@@ -123,16 +105,11 @@ class SimpleMPC(Node):
 
         self.yaw = math.atan2(siny, cosy)
 
-    # ==========================================================
-    # Laser Callback
-    # ==========================================================
+
     def scan_callback(self, msg):
 
         self.scan = msg
 
-    # ==========================================================
-    # Simulate Future Trajectory
-    # ==========================================================
     def simulate_trajectory(self, v, w):
 
         traj = []
@@ -230,9 +207,7 @@ class SimpleMPC(Node):
 
         return cost       
 
-    # ==========================================================
-    # Path Error
-    # ==========================================================
+
     def nearest_path_error(self, point):
 
         if len(self.path) == 0:
@@ -241,8 +216,20 @@ class SimpleMPC(Node):
         px, py = point
 
         min_dist = 1e9
+        best_idx = self.current_path_index
 
-        for p in self.path:
+        # SEARCH ONLY FORWARD PART OF PATH
+        search_end = min(
+            self.current_path_index + 2,
+            len(self.path)
+        )
+
+        for i in range(
+            self.current_path_index,
+            search_end
+        ):
+
+            p = self.path[i]
 
             d = math.hypot(
                 px - p[0],
@@ -250,13 +237,15 @@ class SimpleMPC(Node):
             )
 
             if d < min_dist:
+
                 min_dist = d
+                best_idx = i
+
+        self.current_path_index = best_idx
 
         return min_dist
 
-    # ==========================================================
-    # Obstacle Cost
-    # ==========================================================
+
     def obstacle_cost(self, traj):
 
         obstacle_points = self.get_obstacle_points()
@@ -331,9 +320,7 @@ class SimpleMPC(Node):
         return 5.0 * yaw_error
 
 
-    # ==========================================================
-    # Goal Check
-    # ==========================================================
+   
     def goal_reached(self):
 
         if len(self.path) == 0:
@@ -348,16 +335,12 @@ class SimpleMPC(Node):
 
         return d < self.goal_tolerance
 
-    # ==========================================================
-    # Cost Function
-    # ==========================================================
+
     def compute_cost(self, traj, v, w):
 
         cost = 0.0
 
-        # -----------------------------------
-        # Path tracking cost
-        # -----------------------------------
+
         for pt in traj:
 
             path_error = self.nearest_path_error(
@@ -366,9 +349,6 @@ class SimpleMPC(Node):
 
             cost += 3.0 * path_error
 
-        # -----------------------------------
-        # Goal attraction
-        # -----------------------------------
         goal = self.path[-1]
 
         final_pt = traj[-1]
@@ -380,29 +360,18 @@ class SimpleMPC(Node):
 
         cost += 2.0 * goal_error
 
-        # -----------------------------------
-        # Obstacle penalty
-        # -----------------------------------
+
         cost += self.obstacle_cost(traj)
 
-        cost += self.heading_cost(traj)
-        # cost += self.dynamic_obstacle_cost(traj)
 
-        # -----------------------------------
-        # Penalize excessive turning
-        # -----------------------------------
         cost += 0.2 * abs(w)
 
-        # -----------------------------------
-        # Encourage forward motion
-        # -----------------------------------
+
         cost -= 8.0 * v
 
         return cost
 
-    # ==========================================================
-    # Main MPC Loop
-    # ==========================================================
+   
     def control_loop(self):
 
         try:
@@ -467,11 +436,6 @@ class SimpleMPC(Node):
             )
 
 
-
-
-# ==========================================================
-# Main
-# ==========================================================
 def main(args=None):
 
     rclpy.init(args=args)
