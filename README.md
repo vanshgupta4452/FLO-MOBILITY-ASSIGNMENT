@@ -1,229 +1,214 @@
-# Autonomous Navigation with Regulated Pure Pursuit
-
-A ROS2-based navigation stack implementing path smoothing and regulated pure pursuit control for differential drive robots in constrained environments. [Video](https://drive.google.com/file/d/17OE4Cf4g9UPwNrmvYiQqMd2OCQQHhMXT/view?usp=sharing)
-
-## Overview
-
-This package addresses the challenge of converting discrete waypoints from a global planner into smooth, dynamically-feasible trajectories while ensuring accurate tracking with adaptive velocity regulation.
-
-### Key Features
-
-- **Path Smoothing**: Converts discrete waypoints into continuous trajectories with rounded corners
-- **Regulated Pure Pursuit**: Adaptive velocity control based on path curvature and proximity to obstacles
-- **Dynamic Obstacle Avoidance**: Real-time laser scan integration for collision prevention
-- **Velocity Scaling**: Automatic speed reduction at sharp turns and near goal positions
-- **Tight Space Navigation**: Suitable for confined environments with dynamic obstacles
+# MPC Based Dynamic Obstacle Avoidance and Path Tracking
 
 ## Problem Statement
 
-Mobile robots typically receive coarse paths consisting of discrete waypoints from global planners. Direct execution of these waypoints results in:
-- Jerky, non-smooth motion
-- Potential collision risks at sharp corners
-- Inefficient velocity profiles
-- Poor trajectory tracking accuracy
+This assignment is based on the reference repository:
 
-This implementation solves these issues through:
-1. **Path Refinement**: Smoothing discrete waypoints into continuous trajectories
-2. **Adaptive Control**: Regulating velocity based on local path geometry and obstacles
-3. **Safe Navigation**: Real-time obstacle detection and avoidance
+https://github.com/manojkarnekar/smoothing-rpp/tree/master
 
-## Architecture
+The original repository uses a Pure Pursuit controller for trajectory tracking. The robot stops whenever an obstacle comes in the path and resumes only after the obstacle is removed.
 
-```
-┌─────────────────┐
-│   Waypoints     │
-│   (CSV File)    │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────────────┐
-│  Path Smoother Node     │
-│  - Bézier interpolation │
-│  - Corner rounding      │
-└──────────┬──────────────┘
-           │ /path (nav_msgs/Path)
-           ▼
-┌──────────────────────────────┐
-│  Pure Pursuit Controller     │
-│  - Lookahead calculation     │
-│  - Curvature-based scaling   │
-│  - Obstacle detection        │
-└──────────┬───────────────────┘
-           │ /cmd_vel
-           ▼
-┌──────────────────┐
-│  Differential    │
-│  Drive Robot     │
-└──────────────────┘
-```
+### Objective
 
-## Algorithm Details
+Replace the Pure Pursuit tracker with an MPC-based trajectory tracker and enable the robot to:
 
-### Path Smoothing
+- Follow a smooth trajectory
+- Avoid static obstacles
+- Avoid dynamic obstacles
+- Rejoin the original path after obstacle avoidance
+- Use 2D LiDAR for obstacle detection
 
-The smoother applies Bézier curve interpolation at waypoint corners:
-- Detects sharp angles between consecutive segments
-- Inserts quadratic Bézier curves with configurable radius
-- Maintains path connectivity and resolution
-- Preserves start and end points
+---
 
-### Regulated Pure Pursuit
+# Implemented Solution
 
-Standard pure pursuit enhanced with:
+## 1. MPC Based Trajectory Tracking
 
-**Curvature-Based Velocity Regulation**
-```
-v = v_desired × min(1.0, r_min/r_current)
-```
-Where `r` is the path curvature radius
+The original Pure Pursuit tracker was replaced with a custom MPC-like trajectory tracker implemented in Python using ROS2.
 
-**Approach Velocity Scaling**
-```
-v = v × min(1.0, d_goal/d_scaling)
-```
-Smoothly decelerates as the robot approaches the goal
 
-**Adaptive Lookahead Distance**
-```
-L_d = clamp(v × t_lookahead, L_min, L_max)
-```
-Velocity-scaled lookahead for stable tracking
 
-**Rotate-to-Heading**
-- Triggers in-place rotation when heading error exceeds threshold
-- Prevents lateral drift at sharp corners
+### MPC Workflow
 
-**Obstacle Detection**
-- 120° frontal scan coverage (-60° to +60°)
-- 0.5m detection threshold
-- Immediate stop-and-wait behavior
+1. Generate candidate trajectories
+2. Simulate robot motion
+3. Compute cost for every trajectory
+4. Select minimum cost trajectory
+5. Publish optimal velocity commands
 
-## Installation
+---
 
-```bash
-cd ~/ros2_ws/src
-git clone https://github.com/manojkarnekar/smoothing-rpp.git nav
-cd ~/ros2_ws
-colcon build --symlink-install
-source install/setup.bash
-```
+# MPC Cost Function
 
-## Usage
+The cost function considers:
 
-### 1. Launch Simulation Environment
+| Parameter | Purpose |
+|---|---|
+| Path Error | Keep robot close to path |
+| Goal Error | Move robot towards goal |
+| Obstacle Cost | Avoid collisions |
+| Angular Velocity Cost | Reduce oscillations |
+| Velocity Reward | Encourage forward motion |
 
-**Terminal 1:**
-```bash
-export TURTLEBOT3_MODEL=burger
-ros2 launch nav sim_bringup.py
-```
+Final cost:
 
-This launches:
-- Gazebo with empty world
-- TurtleBot3 model
-- Pure pursuit controller
-- RViz2 visualization
+cost += 3.0 * path_error
+cost += 2.0 * goal_error
+cost += obstacle_cost
+cost += 0.2 * abs(w)
+cost -= 8.0 * v
 
-**Add obstacles in Gazebo** after launch for testing dynamic avoidance.
+---
 
-### 2. Start Path Smoother
 
-**Terminal 2:**
-```bash
-ros2 run nav smoothing
-```
 
-Loads waypoints from CSV, generates smooth trajectory, and publishes:
+# Dynamic Bubble Planner
 
-- Original waypoints to /waypoints (visualized in red in RViz)
-- Smoothed trajectory to /path (visualized in green in RViz)
+A custom Dynamic Bubble Planner was implemented in C++.
 
-## Configuration
+## Responsibilities
 
-### Waypoint File Format
+- Read CSV waypoints
+- Generate smooth path
+- Detect obstacles using LiDAR
+- Generate local detour around obstacle
+- Reconnect robot back to original path
 
-`waypoints/waypoint.csv`:
-```csv
-0.0,0.0
-1.0,0.0
-1.0,1.0
-2.0,1.0
-```
+---
 
-### Key Parameters
+# Obstacle Detection
 
-**Path Smoother** (`smoothing` node):
-- `path_resolution`: Interpolation resolution (default: 0.1m)
-- `path_file`: CSV waypoint file path
-- `frame_id`: TF frame for path (default: "odom")
+Obstacle information is obtained using:
 
-**Pure Pursuit** (`pure_pursuit_tracker` node):
-- `desired_linear_vel`: Target velocity (default: 0.3 m/s)
-- `lookahead_time`: Lookahead time horizon (default: 1.5s)
-- `min_lookahead_distance`: Minimum lookahead (default: 0.3m)
-- `max_lookahead_distance`: Maximum lookahead (default: 0.9m)
-- `regulated_linear_scaling_min_radius`: Curvature regulation threshold (default: 0.9m)
-- `velocity_scaling_distance`: Goal approach distance (default: 0.5m)
-- `rotate_to_heading_min_angle`: In-place rotation threshold (default: 0.785 rad)
+- `/scan` topic
+- `sensor_msgs/msg/LaserScan`
 
-## Topics
+Detected obstacle points are transformed from:
 
-| Topic | Type | Description |
-|-------|------|-------------|
-| `/path` | nav_msgs/Path | Smoothed trajectory |
-| `/waypoints` | nav_msgs/Path | Original waypoints |
+- LiDAR frame
+- to
+- Odom frame
+
+
+
+---
+
+# Static Obstacle Avoidance
+
+When an obstacle blocks the path:
+
+1. Collision region is detected
+2. Start and end indices are computed
+3. Safe offset is generated
+4. Temporary curved detour path is created
+5. MPC follows detour path
+6. Robot rejoins original path
+
+---
+
+# Dynamic Obstacle Handling
+
+Dynamic obstacles are handled continuously.
+
+## Approach
+
+- LiDAR updates obstacles in real time
+- Planner regenerates avoidance path
+- MPC replans trajectory every control cycle
+- Robot smoothly avoids moving obstacles
+
+This allows the robot to react to randomly appearing obstacles during traversal.
+
+---
+
+# ROS2 Topics Used
+
+| Topic | Type | Purpose |
+|---|---|---|
+| `/path` | nav_msgs/Path | Planned path |
+| `/raw_path` | nav_msgs/Path | Original path |
+| `/odom` | nav_msgs/Odometry | Robot pose |
+| `/scan` | sensor_msgs/LaserScan | LiDAR data |
 | `/cmd_vel` | geometry_msgs/Twist | Velocity commands |
-| `/scan` | sensor_msgs/LaserScan | Laser scan data |
-| `/odom` | nav_msgs/Odometry | Robot odometry |
-| `/pure_pursuit/lookahead_point` | geometry_msgs/PointStamped | Current lookahead point |
 
-## Behavior Characteristics
+---
 
-### Smooth Motion
-- Continuous velocity profiles without sudden changes
-- Gradual acceleration/deceleration based on curvature
-- No oscillations or overshoot at waypoints
+# Important Parameters
 
-### Tight Space Navigation
-- Automatic speed reduction in narrow passages
-- Stop-and-wait for dynamic obstacles
-- Maintains safe clearance from obstacles
+## MPC Parameters
 
-### Robustness
-- Handles missed TF lookups gracefully
-- Path preemption support for replanning
-- Goal tolerance checking with configurable thresholds
+self.horizon = 30
+self.dt = 0.06
+self.max_v = 0.3
+self.max_w = 1.25
 
-## Performance
 
-Typical performance metrics:
-- Path tracking error: < 0.1m (straight segments)
-- Goal reaching accuracy: < 0.2m
-- Obstacle detection latency: < 50ms
-- Control loop frequency: 30 Hz
+## Planner Parameters
 
-## Future Enhancements
+safe_distance = 0.4
+lookahead_points = 80
+path_resolution = 0.05
 
-- Trajectory optimization with time-optimal velocity profiles
-- Model Predictive Control (MPC) for tighter tracking
-- Dynamic window approach integration
-- Multi-resolution path smoothing
-- Recovery behaviors for stuck scenarios
+---
 
-## Dependencies
+# Algorithm Flow
+
+## Planner
+
+1. Load CSV waypoints
+2. Smooth path
+3. Detect obstacles
+4. Generate local detour
+5. Publish updated path
+
+## MPC Controller
+
+1. Receive path
+2. Read odometry
+3. Read LiDAR
+4. Simulate trajectories
+5. Compute trajectory cost
+6. Publish best velocity
+
+---
+
+# Key Advantages
+
+- Smooth trajectory tracking
+- Real-time obstacle avoidance
+- Handles dynamic obstacles
+- Continuous replanning
+- Modular ROS2 architecture
+- Works with existing LiDAR setup
+
+---
+
+# Technologies Used
 
 - ROS2 Humble
-- TurtleBot3 packages
-- Gazebo Classic
+- Python
+- C++
+- TF2
+- LiDAR
+- Gazebo
 - RViz2
-- tf2_ros
-- sensor_msgs
-- nav_msgs
-- geometry_msgs
+- MPC Control
+- Path Smoothing
 
-## License
+---
 
+# Conclusion
 
-## Author
+The assignment successfully replaces the Pure Pursuit controller with an MPC-based trajectory tracker.
 
-Manoj K
+The system:
+
+- Tracks smooth trajectories
+- Avoids static obstacles
+- Handles dynamic obstacles
+- Rejoins original path
+- Uses real-time LiDAR data
+
+The final solution provides significantly smoother and safer navigation compared to the original Pure Pursuit implementation.
+
+---
