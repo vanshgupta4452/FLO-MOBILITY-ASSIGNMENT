@@ -57,7 +57,7 @@ class SimpleMPC(Node):
 
 
         self.horizon = 30
-        self.dt = 0.1
+        self.dt = 0.06
 
         self.max_v = 0.3
         self.max_w = 1.25
@@ -71,7 +71,7 @@ class SimpleMPC(Node):
         self.dynamic_obstacles = []
 
         self.timer = self.create_timer(
-            0.1,
+            0.03,
             self.control_loop
         )
 
@@ -167,46 +167,8 @@ class SimpleMPC(Node):
 
 
 
-    def predict_obstacle(self, obs):
 
-        traj = []
-
-        x = obs["x"]
-        y = obs["y"]
-
-        vx = obs["vx"]
-        vy = obs["vy"]
-
-        for i in range(self.horizon):
-
-            t = i * self.dt
-
-            fx = x + vx * t
-            fy = y + vy * t
-
-            traj.append((fx, fy))
-
-        return traj 
-
-
-
-    def dynamic_obstacle_cost(self, robot_traj):
-
-        cost = 0.0
-
-        for obs in self.dynamic_obstacles:
-
-            obs_traj = self.predict_obstacle(obs)
-
-            for rp, op in zip(robot_traj, obs_traj):
-
-                d = math.hypot(rp[0]-op[0], rp[1]-op[1])
-
-                if d < 0.6:
-                  return 1e6
-
-        return cost       
-
+    
 
     def nearest_path_error(self, point):
 
@@ -218,7 +180,6 @@ class SimpleMPC(Node):
         min_dist = 1e9
         best_idx = self.current_path_index
 
-        # SEARCH ONLY FORWARD PART OF PATH
         search_end = min(
             self.current_path_index + 2,
             len(self.path)
@@ -265,59 +226,15 @@ class SimpleMPC(Node):
                 d = math.hypot(rx - ox, ry - oy)
 
                 # COLLISION
-                if d < 0.35:
+                if d < 0.25:
                     return 1e6
 
                 # Near obstacle
-                elif d < 0.8:
+                elif d < 0.4:
                     cost += 200.0 / d
 
         return cost
 
-
-
-    def heading_cost(self, traj):
-
-        if len(self.path) < 2:
-            return 0.0
-
-        final_pt = traj[-1]
-
-        nearest_idx = 0
-        min_d = 1e9
-
-        for i, p in enumerate(self.path):
-
-            d = math.hypot(
-                final_pt[0] - p[0],
-                final_pt[1] - p[1]
-            )
-
-            if d < min_d:
-                min_d = d
-                nearest_idx = i
-
-        if nearest_idx >= len(self.path) - 1:
-            return 0.0
-
-        p1 = self.path[nearest_idx]
-        p2 = self.path[nearest_idx + 1]
-
-        path_yaw = math.atan2(
-            p2[1] - p1[1],
-            p2[0] - p1[0]
-        )
-
-        robot_yaw = traj[-1][2]
-
-        yaw_error = abs(
-            math.atan2(
-                math.sin(path_yaw - robot_yaw),
-                math.cos(path_yaw - robot_yaw)
-            )
-        )
-
-        return 5.0 * yaw_error
 
 
    

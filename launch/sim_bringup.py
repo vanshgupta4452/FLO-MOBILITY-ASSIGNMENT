@@ -65,9 +65,21 @@ def generate_launch_description():
         }]
     )
 
+    mcp_node = Node(
+        package="nav",
+        executable="mpc.py",
+        name="mcp",
+        parameters=[{
+            'use_sim_time': True
+        }],
+        output="screen"
+    )
+
+
     nodes = []
     nodes.append(turtlebot3_gazebo)
     # nodes.append(pure_pursuit_tracker)
     nodes.append(rviz)
+    nodes.append(mcp_node)
 
     return LaunchDescription(nodes)

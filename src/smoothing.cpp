@@ -1,3 +1,4 @@
+
 #include <rclcpp/rclcpp.hpp>
 
 #include <sensor_msgs/msg/laser_scan.hpp>
@@ -19,7 +20,7 @@ struct Point2D
 {
     double x, y;
 
-    Point2D(double x_ = 0.0, double y_ = 0.0)
+    Point2D(double x_=0.0, double y_=0.0)
         : x(x_), y(y_) {}
 
     double dist(const Point2D& other) const
@@ -27,8 +28,6 @@ struct Point2D
         return std::hypot(x - other.x, y - other.y);
     }
 };
-
-
 
 class PathSmoother
 {
@@ -53,7 +52,8 @@ public:
             int steps =
                 std::max(
                     1,
-                    static_cast<int>(std::ceil(d / resolution)));
+                    static_cast<int>(
+                        std::ceil(d / resolution)));
 
             for (int s = 0; s < steps; s++)
             {
@@ -64,11 +64,11 @@ public:
 
                 p.x =
                     points[i].x +
-                    (points[i + 1].x - points[i].x) * t;
+                    (points[i+1].x - points[i].x) * t;
 
                 p.y =
                     points[i].y +
-                    (points[i + 1].y - points[i].y) * t;
+                    (points[i+1].y - points[i].y) * t;
 
                 result.push_back(p);
             }
@@ -89,8 +89,6 @@ public:
     DynamicBubblePlanner()
         : Node("dynamic_bubble_planner")
     {
-       
-
         declare_parameter(
             "path_file",
             "src/smoothing-rpp/waypoints/waypoint.csv");
@@ -99,12 +97,9 @@ public:
 
         declare_parameter("path_resolution", 0.05);
 
-        declare_parameter("safe_distance", 0.7);
-
-        declare_parameter("detour_offset", 1.2);
+        declare_parameter("safe_distance", 0.4);
 
         declare_parameter("lookahead_points", 80);
-
 
         frame_id_ =
             get_parameter("frame_id").as_string();
@@ -115,25 +110,17 @@ public:
         safe_distance_ =
             get_parameter("safe_distance").as_double();
 
-        detour_offset_ =
-            get_parameter("detour_offset").as_double();
-
         lookahead_points_ =
             get_parameter("lookahead_points").as_int();
-
-
-     
 
         tf_buffer_ =
             std::make_shared<tf2_ros::Buffer>(
                 get_clock());
 
         tf_listener_ =
-            std::make_shared<tf2_ros::TransformListener>(
-                *tf_buffer_);
-
-
-
+            std::make_shared<
+                tf2_ros::TransformListener>(
+                    *tf_buffer_);
 
         rclcpp::QoS qos(rclcpp::KeepLast(1));
         qos.reliable().transient_local();
@@ -148,9 +135,6 @@ public:
                 "/raw_path",
                 qos);
 
-
-
-
         scan_sub_ =
             create_subscription<sensor_msgs::msg::LaserScan>(
                 "/scan",
@@ -159,9 +143,6 @@ public:
                     &DynamicBubblePlanner::scanCallback,
                     this,
                     std::placeholders::_1));
-
-
-
 
         loadPathFromCSV();
 
@@ -173,32 +154,33 @@ public:
 private:
 
 
-
     std::string frame_id_;
 
     double path_resolution_;
 
     double safe_distance_;
 
-    double detour_offset_;
-
     int lookahead_points_;
 
     bool path_loaded_ = false;
 
-    bool avoidance_active_ = false;
-
     double robot_x_ = 0.0;
-
     double robot_y_ = 0.0;
 
-    Point2D saved_obstacle_;
+    int current_path_index_ = 0;
+
+    // stable side lock
+    bool detour_active_ = false;
+
+    int locked_side_ = 1;
+    // 1 = right
+    // -1 = left
+
+    Point2D locked_obstacle_;
 
     std::vector<Point2D> global_path_;
 
     std::vector<Point2D> obstacles_;
-
-    std::vector<Point2D> locked_path_;
 
 
 
@@ -209,8 +191,6 @@ private:
         tf_listener_;
 
 
-
-
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr
         path_pub_;
 
@@ -219,6 +199,7 @@ private:
 
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr
         scan_sub_;
+
 
 
     void loadPathFromCSV()
@@ -249,22 +230,12 @@ private:
             std::stringstream ss(line);
 
             double x, y;
-
             char comma;
 
             if (ss >> x >> comma >> y)
             {
                 waypoints.emplace_back(x, y);
             }
-        }
-
-        if (waypoints.empty())
-        {
-            RCLCPP_ERROR(
-                get_logger(),
-                "No waypoints found");
-
-            return;
         }
 
         publishPath(waypoints, raw_path_pub_);
@@ -280,55 +251,74 @@ private:
 
         RCLCPP_INFO(
             get_logger(),
-            "Loaded %zu path points",
+            "Loaded path with %zu points",
             global_path_.size());
     }
-
 
     bool updateRobotPose()
     {
         try
         {
-            geometry_msgs::msg::TransformStamped tf =
+            auto tf =
                 tf_buffer_->lookupTransform(
                     frame_id_,
                     "base_link",
                     tf2::TimePointZero);
 
-            robot_x_ = tf.transform.translation.x;
+            robot_x_ =
+                tf.transform.translation.x;
 
-            robot_y_ = tf.transform.translation.y;
+            robot_y_ =
+                tf.transform.translation.y;
 
             return true;
         }
-        catch (tf2::TransformException &ex)
+        catch (...)
         {
             return false;
         }
     }
 
 
+
     int getClosestPathIndex()
     {
         double min_dist = 1e9;
 
-        int best_idx = 0;
+        int best_idx = current_path_index_;
 
-        for (size_t i = 0; i < global_path_.size(); i++)
+        int end =
+            std::min(
+                current_path_index_ + 50,
+                (int)global_path_.size());
+
+        for (int i = current_path_index_;
+             i < end;
+             i++)
         {
-            double d = std::hypot(
-                robot_x_ - global_path_[i].x,
-                robot_y_ - global_path_[i].y);
+            double d =
+                std::hypot(
+                    robot_x_ - global_path_[i].x,
+                    robot_y_ - global_path_[i].y);
 
             if (d < min_dist)
             {
                 min_dist = d;
-
                 best_idx = i;
             }
         }
 
+        current_path_index_ = best_idx;
+
         return best_idx;
+    }
+
+
+    bool sameObstacle(
+        const Point2D& a,
+        const Point2D& b)
+    {
+        return a.dist(b) < 0.5;
     }
 
 
@@ -368,27 +358,19 @@ private:
             laser_pt.point.y =
                 r * std::sin(angle);
 
-            laser_pt.point.z = 0.0;
-
             try
             {
-                geometry_msgs::msg::PointStamped odom_pt;
-
-                odom_pt =
+                auto odom_pt =
                     tf_buffer_->transform(
                         laser_pt,
                         frame_id_,
                         tf2::durationFromSec(0.1));
 
-                Point2D obs;
-
-                obs.x = odom_pt.point.x;
-
-                obs.y = odom_pt.point.y;
-
-                obstacles_.push_back(obs);
+                obstacles_.emplace_back(
+                    odom_pt.point.x,
+                    odom_pt.point.y);
             }
-            catch (tf2::TransformException &ex)
+            catch (...)
             {
             }
 
@@ -398,20 +380,7 @@ private:
         generateAvoidancePath();
     }
 
-    // ========================================================
-    // SAME OBSTACLE
-    // ========================================================
 
-    bool sameObstacle(
-        const Point2D& a,
-        const Point2D& b)
-    {
-        return a.dist(b) < 0.3;
-    }
-
-    // ========================================================
-    // MAIN PLANNER
-    // ========================================================
 
     void generateAvoidancePath()
     {
@@ -434,12 +403,14 @@ private:
         Point2D detected_obstacle;
 
         int start_idx = -1;
-
         int end_idx = -1;
 
-        // ====================================================
-        // CHECK ONLY LOCAL FORWARD PATH
-        // ====================================================
+        double min_obs_x = 1e9;
+        double max_obs_x = -1e9;
+
+        double min_obs_y = 1e9;
+        double max_obs_y = -1e9;
+
 
         for (int i = nearest_idx;
              i < search_end;
@@ -450,57 +421,53 @@ private:
                 if (global_path_[i].dist(obs)
                     < safe_distance_)
                 {
-                    if (!found_collision)
-                    {
-                        detected_obstacle = obs;
+                    found_collision = true;
 
-                        found_collision = true;
-                    }
+                    detected_obstacle = obs;
 
                     if (start_idx == -1)
                         start_idx = i;
 
                     end_idx = i;
+
+                    min_obs_x =
+                        std::min(min_obs_x, obs.x);
+
+                    max_obs_x =
+                        std::max(max_obs_x, obs.x);
+
+                    min_obs_y =
+                        std::min(min_obs_y, obs.y);
+
+                    max_obs_y =
+                        std::max(max_obs_y, obs.y);
                 }
             }
         }
 
-        // ====================================================
-        // NO COLLISION
-        // ====================================================
+
 
         if (!found_collision)
         {
-            avoidance_active_ = false;
+            detour_active_ = false;
 
             publishPath(global_path_, path_pub_);
 
             return;
         }
 
-        // ====================================================
-        // KEEP OLD AVOIDANCE PATH
-        // ====================================================
 
-        if (avoidance_active_)
-        {
-            if (sameObstacle(
-                    detected_obstacle,
-                    saved_obstacle_))
-            {
-                publishPath(
-                    locked_path_,
-                    path_pub_);
+        double obs_width =
+            std::max(
+                max_obs_x - min_obs_x,
+                max_obs_y - min_obs_y);
 
-                return;
-            }
-        }
+        double dynamic_offset =
+            std::max(
+                0.7,
+                obs_width + safe_distance_);
 
-        // ====================================================
-        // CREATE NEW DETOUR
-        // ====================================================
 
-        saved_obstacle_ = detected_obstacle;
 
         start_idx =
             std::max(
@@ -512,21 +479,6 @@ private:
                 (int)global_path_.size() - 1,
                 end_idx + 5);
 
-        std::vector<Point2D> new_path;
-
-        // ====================================================
-        // BEFORE OBSTACLE
-        // ====================================================
-
-        for (int i = 0; i < start_idx; i++)
-        {
-            new_path.push_back(global_path_[i]);
-        }
-
-        // ====================================================
-        // DETOUR
-        // ====================================================
-
         Point2D start =
             global_path_[start_idx];
 
@@ -534,55 +486,133 @@ private:
             global_path_[end_idx];
 
         double dx = end.x - start.x;
-
         double dy = end.y - start.y;
 
         double len = std::hypot(dx, dy);
 
-        if (len > 1e-6)
+        if (len < 1e-6)
+            return;
+
+        dx /= len;
+        dy /= len;
+
+
+
+        double left_px = -dy;
+        double left_py = dx;
+
+        double right_px = dy;
+        double right_py = -dx;
+
+
+
+        double left_min_dist = 1e9;
+        double right_min_dist = 1e9;
+
+        for (const auto& obs : obstacles_)
         {
-            dx /= len;
+            double left_test_x =
+                detected_obstacle.x +
+                left_px * dynamic_offset;
 
-            dy /= len;
+            double left_test_y =
+                detected_obstacle.y +
+                left_py * dynamic_offset;
 
-            double px = -dy;
+            double right_test_x =
+                detected_obstacle.x +
+                right_px * dynamic_offset;
 
-            double py = dx;
+            double right_test_y =
+                detected_obstacle.y +
+                right_py * dynamic_offset;
 
-            int num_points = 40;
+            double dl =
+                std::hypot(
+                    obs.x - left_test_x,
+                    obs.y - left_test_y);
 
-            for (int i = 0; i <= num_points; i++)
+            double dr =
+                std::hypot(
+                    obs.x - right_test_x,
+                    obs.y - right_test_y);
+
+            left_min_dist =
+                std::min(left_min_dist, dl);
+
+            right_min_dist =
+                std::min(right_min_dist, dr);
+        }
+
+
+        if (!detour_active_ ||
+            !sameObstacle(
+                detected_obstacle,
+                locked_obstacle_))
+        {
+            locked_obstacle_ = detected_obstacle;
+
+            detour_active_ = true;
+
+            if (left_min_dist > right_min_dist)
             {
-                double t =
-                    static_cast<double>(i)
-                    / num_points;
-
-                Point2D p;
-
-                p.x =
-                    start.x +
-                    t * (end.x - start.x);
-
-                p.y =
-                    start.y +
-                    t * (end.y - start.y);
-
-                // sinusoidal local bubble
-                double shift =
-                    std::sin(t * M_PI)
-                    * detour_offset_;
-
-                p.x += px * shift;
-
-                p.y += py * shift;
-
-                new_path.push_back(p);
+                locked_side_ = -1;
+            }
+            else
+            {
+                locked_side_ = 1;
             }
         }
 
-        // ====================================================
-        // AFTER OBSTACLE
-        // ====================================================
+        double px, py;
+
+        if (locked_side_ == -1)
+        {
+            px = left_px;
+            py = left_py;
+        }
+        else
+        {
+            px = right_px;
+            py = right_py;
+        }
+
+
+
+        std::vector<Point2D> new_path;
+
+        for (int i = 0; i < start_idx; i++)
+        {
+            new_path.push_back(global_path_[i]);
+        }
+
+        int num_points = 40;
+
+        for (int i = 0; i <= num_points; i++)
+        {
+            double t =
+                static_cast<double>(i)
+                / num_points;
+
+            Point2D p;
+
+            p.x =
+                start.x +
+                t * (end.x - start.x);
+
+            p.y =
+                start.y +
+                t * (end.y - start.y);
+
+            double shift =
+                std::sin(t * M_PI)
+                * dynamic_offset;
+
+            p.x += px * shift;
+            p.y += py * shift;
+
+            new_path.push_back(p);
+        }
 
         for (size_t i = end_idx + 1;
              i < global_path_.size();
@@ -591,27 +621,17 @@ private:
             new_path.push_back(global_path_[i]);
         }
 
-        // ====================================================
-        // FINAL SMOOTHING
-        // ====================================================
-
         auto smooth_path =
             PathSmoother::smooth(
                 new_path,
                 path_resolution_);
 
-        locked_path_ = smooth_path;
-
-        avoidance_active_ = true;
-
         publishPath(
-            locked_path_,
+            smooth_path,
             path_pub_);
     }
 
-    // ========================================================
-    // PATH PUBLISH
-    // ========================================================
+
 
     void publishPath(
         const std::vector<Point2D>& path,
@@ -633,8 +653,6 @@ private:
 
             pose.pose.position.y = pt.y;
 
-            pose.pose.position.z = 0.0;
-
             pose.pose.orientation.w = 1.0;
 
             msg.poses.push_back(pose);
@@ -644,9 +662,6 @@ private:
     }
 };
 
-// ============================================================
-// MAIN
-// ============================================================
 
 int main(int argc, char** argv)
 {
