@@ -176,30 +176,23 @@ path_resolution = 0.05
 
 ---
 
-# Key Advantages
+# Complete Execution Order
 
-- Smooth trajectory tracking
-- Real-time obstacle avoidance
-- Handles dynamic obstacles
-- Continuous replanning
-- Modular ROS2 architecture
-- Works with existing LiDAR setup
+Run the following commands in separate terminals:
 
----
+## Terminal 1
 
-# Technologies Used
+```bash
+ros2 launch nav sim_bringup.py
+```
 
-- ROS2 Humble
-- Python
-- C++
-- TF2
-- LiDAR
-- Gazebo
-- RViz2
-- MPC Control
-- Path Smoothing
+## Terminal 2
 
----
+```bash
+ros2 run nav smoothing
+```
+
+
 
 # Conclusion
 
