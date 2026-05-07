@@ -52,12 +52,13 @@ The cost function considers:
 
 Final cost:
 
+```python
 cost += 3.0 * path_error
 cost += 2.0 * goal_error
 cost += obstacle_cost
 cost += 0.2 * abs(w)
 cost -= 8.0 * v
-
+```
 ---
 
 
@@ -137,17 +138,20 @@ This allows the robot to react to randomly appearing obstacles during traversal.
 
 ## MPC Parameters
 
+```python
 self.horizon = 30
 self.dt = 0.06
 self.max_v = 0.3
 self.max_w = 1.25
-
+```
 
 ## Planner Parameters
 
+```cpp
 safe_distance = 0.4
 lookahead_points = 80
 path_resolution = 0.05
+```
 
 ---
 
